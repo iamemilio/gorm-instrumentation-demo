@@ -30,31 +30,10 @@ type Product struct {
 }
 
 const (
-	BackendError = "backend error"
+	BackendError                           = "backend error"
+	databaseName                           = "test.db"
+	databaseType newrelic.DatastoreProduct = "gormSQLite"
 )
-
-func NewApp(appName string) *App {
-	// initialize new relic go aganet app
-	app, err := newrelic.NewApplication(
-		newrelic.ConfigAppName(appName),
-		newrelic.ConfigFromEnvironment(),
-		newrelic.ConfigDebugLogger(os.Stdout),
-	)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	// initialize sqlite server connection with GORM
-	db, err := gorm.Open(sqlite.Open("test.db"), &gorm.Config{})
-	if err != nil {
-		panic("failed to connect database")
-	}
-	// Migrate the schema
-	db.AutoMigrate(&Product{})
-
-	return &App{db: db, App: app}
-}
 
 // handler for formatting and sending bad request messages
 func errorResponse(w http.ResponseWriter, txn *newrelic.Transaction, errorNumber int, clientError, internalError error) {
@@ -83,6 +62,30 @@ func okResponse(w http.ResponseWriter, txn *newrelic.Transaction, message string
 	w.Write([]byte(message))
 }
 
+func NewApp(appName string) *App {
+	// initialize new relic go aganet app
+	app, err := newrelic.NewApplication(
+		newrelic.ConfigAppName(appName),
+		newrelic.ConfigFromEnvironment(),
+		newrelic.ConfigDistributedTracerEnabled(true),
+		newrelic.ConfigDebugLogger(os.Stdout),
+	)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	// initialize sqlite server connection with GORM
+	db, err := gorm.Open(sqlite.Open(databaseName), &gorm.Config{})
+	if err != nil {
+		panic("failed to connect database")
+	}
+	// Migrate the schema
+	db.AutoMigrate(&Product{})
+
+	return &App{db: db, App: app}
+}
+
 // API endpoing for the root of the application
 // Serves a static HTTP file
 func (app *App) Index(w http.ResponseWriter, r *http.Request) {
@@ -100,16 +103,33 @@ func (app *App) Index(w http.ResponseWriter, r *http.Request) {
 // a helper function to execute GET database transactions
 // gets the first Product that meets the provided condition
 func (app *App) getProduct(txn *newrelic.Transaction, condition, value string) (Product, error) {
-	// trace the getProduct function with a newRelic Segment
+	// trace the createProduct function with a newRelic Segment
+	defer txn.StartSegment("getProduct").End()
+
+	// create a datastore segment to from the current transaction
+	// to trace this interraction with the database through GORM
+	dss := &newrelic.DatastoreSegment{
+		StartTime:          txn.StartSegmentNow(),
+		Product:            databaseType,
+		Collection:         "Product",
+		Operation:          "First",
+		ParameterizedQuery: condition,
+		QueryParameters: map[string]interface{}{
+			"?": value,
+		},
+		DatabaseName: databaseName,
+	}
+	defer dss.End()
+
 	// create a new relic context to pass to gorm to allow
 	// the go agent to observe the database transactions
-	defer txn.StartSegment("getProduct").End()
 	ctx := newrelic.NewContext(context.Background(), txn)
 
 	var product Product
 	gormdb := app.db.WithContext(ctx)
-	tx := gormdb.First(&product, condition, value)
-	return product, tx.Error
+	err := gormdb.First(&product, condition, value).Error
+
+	return product, err
 }
 
 // API endpoint for the /get pattern
@@ -157,18 +177,25 @@ func (app *App) Get(w http.ResponseWriter, r *http.Request) {
 // a helper function to execute the database create transaction
 func (app *App) createProduct(txn *newrelic.Transaction, code, name string, price int) error {
 	// trace the createProduct function with a newRelic Segment
+	defer txn.StartSegment("createProduct").End()
+
+	// create a transaction from the current segment to instrument
+	// this database transaction
+	dbtxn := txn.Application().StartTransaction("gormSQLiteWrite")
+	defer dbtxn.End()
+
 	// create a new relic context to pass to gorm to allow
 	// the go agent to observe the database transactions
-	defer txn.StartSegment("getProduct").End()
-	ctx := newrelic.NewContext(context.Background(), txn)
+	ctx := newrelic.NewContext(context.Background(), dbtxn)
 
 	gormdb := app.db.WithContext(ctx)
-	tx := gormdb.Create(&Product{
+	err := gormdb.Create(&Product{
 		Code:  code,
 		Name:  name,
 		Price: price,
-	})
-	return tx.Error
+	}).Error
+
+	return err
 }
 
 // API endpoint for the /add pattern
