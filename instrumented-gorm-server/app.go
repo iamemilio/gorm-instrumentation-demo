@@ -1,6 +1,9 @@
 // Copyright 2020 New Relic Corporation. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+// mysql database hosted in local container for this example
+// podman run --name mysql -p 3306:3306 -e MYSQL_ALLOW_EMPTY_PASSWORD=true -e MYSQL_DATABASE="product" mysql
+
 package main
 
 import (
@@ -11,9 +14,15 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
+
+	// Import newrelic database driver as custom driver
+	// GORM will automatically use this driver as its mysql driver
+	// https://gorm.io/docs/connecting_to_the_database.html#Customize-Driver
+	_ "github.com/newrelic/go-agent/v3/integrations/nrmysql"
 
 	"github.com/newrelic/go-agent/v3/newrelic"
-	"gorm.io/driver/sqlite"
+	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -30,9 +39,7 @@ type Product struct {
 }
 
 const (
-	BackendError                           = "backend error"
-	databaseName                           = "test.db"
-	databaseType newrelic.DatastoreProduct = "gormSQLite"
+	BackendError = "backend error"
 )
 
 // handler for formatting and sending bad request messages
@@ -42,9 +49,6 @@ func errorResponse(w http.ResponseWriter, txn *newrelic.Transaction, errorNumber
 
 	// log error locally
 	log.Println(internalError)
-
-	// log error with go agent
-	txn.NoticeError(internalError)
 
 	// send http error to client
 	w.WriteHeader(errorNumber)
@@ -62,7 +66,17 @@ func okResponse(w http.ResponseWriter, txn *newrelic.Transaction, message string
 	w.Write([]byte(message))
 }
 
-func NewApp(appName string) *App {
+func NewApp(appName, connectionString string) *App {
+	// Wrap database conneciton with GORM
+	gormdb, err := gorm.Open(mysql.New(mysql.Config{
+		DriverName: "nrmysql",
+		DSN:        connectionString,
+	}), &gorm.Config{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Migrate the schema
+	gormdb.AutoMigrate(&Product{})
 	// initialize new relic go aganet app
 	app, err := newrelic.NewApplication(
 		newrelic.ConfigAppName(appName),
@@ -71,19 +85,12 @@ func NewApp(appName string) *App {
 		newrelic.ConfigDebugLogger(os.Stdout),
 	)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 
-	// initialize sqlite server connection with GORM
-	db, err := gorm.Open(sqlite.Open(databaseName), &gorm.Config{})
-	if err != nil {
-		panic("failed to connect database")
-	}
-	// Migrate the schema
-	db.AutoMigrate(&Product{})
+	app.WaitForConnection(5 * time.Second)
 
-	return &App{db: db, App: app}
+	return &App{db: gormdb, App: app}
 }
 
 // API endpoing for the root of the application
@@ -105,21 +112,6 @@ func (app *App) Index(w http.ResponseWriter, r *http.Request) {
 func (app *App) getProduct(txn *newrelic.Transaction, condition, value string) (Product, error) {
 	// trace the createProduct function with a newRelic Segment
 	defer txn.StartSegment("getProduct").End()
-
-	// create a datastore segment to from the current transaction
-	// to trace this interraction with the database through GORM
-	dss := &newrelic.DatastoreSegment{
-		StartTime:          txn.StartSegmentNow(),
-		Product:            databaseType,
-		Collection:         "Product",
-		Operation:          "First",
-		ParameterizedQuery: condition,
-		QueryParameters: map[string]interface{}{
-			"?": value,
-		},
-		DatabaseName: databaseName,
-	}
-	defer dss.End()
 
 	// create a new relic context to pass to gorm to allow
 	// the go agent to observe the database transactions
@@ -179,14 +171,9 @@ func (app *App) createProduct(txn *newrelic.Transaction, code, name string, pric
 	// trace the createProduct function with a newRelic Segment
 	defer txn.StartSegment("createProduct").End()
 
-	// create a transaction from the current segment to instrument
-	// this database transaction
-	dbtxn := txn.Application().StartTransaction("gormSQLiteWrite")
-	defer dbtxn.End()
-
 	// create a new relic context to pass to gorm to allow
 	// the go agent to observe the database transactions
-	ctx := newrelic.NewContext(context.Background(), dbtxn)
+	ctx := newrelic.NewContext(context.Background(), txn)
 
 	gormdb := app.db.WithContext(ctx)
 	err := gormdb.Create(&Product{
@@ -250,7 +237,7 @@ func (app *App) Handle(pattern string, handler func(http.ResponseWriter, *http.R
 }
 
 func main() {
-	app := NewApp("gorm-demo")
+	app := NewApp("gorm-demo", "root@/product?charset=utf8mb4&parseTime=True&loc=Local")
 
 	// HTTP handlers
 	app.Handle("/", app.Index)
