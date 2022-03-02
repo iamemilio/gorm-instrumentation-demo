@@ -40,7 +40,7 @@ func main() {
 	// Migrate the schema
 	db.AutoMigrate(&Product{})
 
-	// Create New Relic Transaction for GORM Create
+	// Create New Relic Transaction to monitor GORM Database interraction
 	txn := app.StartTransaction("GORM SQLite Operation")
 	ctx := newrelic.NewContext(context.Background(), txn)
 	nrdb := db.WithContext(ctx)
@@ -62,6 +62,6 @@ func main() {
 	// Delete - delete product
 	nrdb.Delete(&product, 1)
 
-	// End New Relic GORM Create
+	// End New Relic transaction trace
 	txn.End()
 }
