@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"os"
-	"time"
 
 	_ "github.com/newrelic/go-agent/v3/integrations/nrsqlite3"
 	"github.com/newrelic/go-agent/v3/newrelic"
@@ -28,8 +27,6 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
-	app.WaitForConnection(5 * time.Second)
 
 	dialector := sqlite.Dialector{
 		DriverName: "nrsqlite3",
@@ -67,6 +64,4 @@ func main() {
 
 	// End New Relic GORM Create
 	txn.End()
-
-	app.Shutdown(5 * time.Second)
 }
