@@ -19,7 +19,7 @@ type Product struct {
 
 func main() {
 	app, err := newrelic.NewApplication(
-		newrelic.ConfigAppName("GORM SQLite App"),
+		newrelic.ConfigAppName("GORM App"),
 		newrelic.ConfigLicense(os.Getenv("NEW_RELIC_LICENSE_KEY")),
 		newrelic.ConfigDebugLogger(os.Stdout),
 		newrelic.ConfigDistributedTracerEnabled(true),
@@ -41,7 +41,7 @@ func main() {
 	db.AutoMigrate(&Product{})
 
 	// Create New Relic Transaction to monitor GORM Database interraction
-	txn := app.StartTransaction("GORM SQLite Operation")
+	txn := app.StartTransaction("GORM Operation")
 	ctx := newrelic.NewContext(context.Background(), txn)
 	nrdb := db.WithContext(ctx)
 
