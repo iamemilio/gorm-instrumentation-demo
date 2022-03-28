@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"time"
 
 	_ "github.com/newrelic/go-agent/v3/integrations/nrsqlite3"
 	"github.com/newrelic/go-agent/v3/newrelic"
@@ -27,6 +28,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	// Wait for go-agent to connect to avoid data loss
+	app.WaitForConnection(5 * time.Second)
 
 	dialector := sqlite.Dialector{
 		DriverName: "nrsqlite3",
@@ -64,4 +68,7 @@ func main() {
 
 	// End New Relic transaction trace
 	txn.End()
+
+	// Wait for shut down to ensure data gets flushed
+	app.Shutdown(5 * time.Second)
 }
