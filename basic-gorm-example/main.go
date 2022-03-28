@@ -44,27 +44,27 @@ func main() {
 	// Migrate the schema
 	db.AutoMigrate(&Product{})
 
-	// Create New Relic Transaction to monitor GORM Database interraction
+	// Create New Relic Transaction to monitor GORM Database
 	txn := app.StartTransaction("GORM Operation")
 	ctx := newrelic.NewContext(context.Background(), txn)
-	nrdb := db.WithContext(ctx)
+	tracedDB := db.WithContext(ctx)
 
 	// Create
-	nrdb.Create(&Product{Code: "D42", Price: 100})
+	tracedDB.Create(&Product{Code: "D42", Price: 100})
 
 	// Read
 	var product Product
-	nrdb.First(&product, 1)                 // find product with integer primary key
-	nrdb.First(&product, "code = ?", "D42") // find product with code D42
+	tracedDB.First(&product, 1)                 // find product with integer primary key
+	tracedDB.First(&product, "code = ?", "D42") // find product with code D42
 
 	// Update - update product's price to 200
-	nrdb.Model(&product).Update("Price", 200)
+	tracedDB.Model(&product).Update("Price", 200)
 	// Update - update multiple fields
-	nrdb.Model(&product).Updates(Product{Price: 200, Code: "F42"}) // non-zero fields
-	nrdb.Model(&product).Updates(map[string]interface{}{"Price": 200, "Code": "F42"})
+	tracedDB.Model(&product).Updates(Product{Price: 200, Code: "F42"}) // non-zero fields
+	tracedDB.Model(&product).Updates(map[string]interface{}{"Price": 200, "Code": "F42"})
 
 	// Delete - delete product
-	nrdb.Delete(&product, 1)
+	tracedDB.Delete(&product, 1)
 
 	// End New Relic transaction trace
 	txn.End()
