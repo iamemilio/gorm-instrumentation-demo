@@ -36,18 +36,18 @@ func main() {
 		DriverName: "nrsqlite3",
 		DSN:        "test.db",
 	}
-	db, err := gorm.Open(dialector, &gorm.Config{})
+	gormDB, err := gorm.Open(dialector, &gorm.Config{})
 	if err != nil {
 		panic("failed to connect database")
 	}
 
 	// Migrate the schema
-	db.AutoMigrate(&Product{})
+	gormDB.AutoMigrate(&Product{})
 
 	// Create New Relic Transaction to monitor GORM Database
-	txn := app.StartTransaction("GORM Operation")
-	ctx := newrelic.NewContext(context.Background(), txn)
-	tracedDB := db.WithContext(ctx)
+	gormTransactionTrace := app.StartTransaction("GORM Operation")
+	gormTransactionContext := newrelic.NewContext(context.Background(), gormTransactionTrace)
+	tracedDB := gormDB.WithContext(gormTransactionContext)
 
 	// Create
 	tracedDB.Create(&Product{Code: "D42", Price: 100})
@@ -67,7 +67,7 @@ func main() {
 	tracedDB.Delete(&product, 1)
 
 	// End New Relic transaction trace
-	txn.End()
+	gormTransactionTrace.End()
 
 	// Wait for shut down to ensure data gets flushed
 	app.Shutdown(5 * time.Second)
