@@ -165,10 +165,6 @@ func (app *App) Add(w http.ResponseWriter, r *http.Request) {
 	okResponse(w, txn, response)
 }
 
-func (app *App) Remote(w http.ResponseWriter, r *http.Request) {
-
-}
-
 // NewApp initializes a an app object with a gorm db object and a New Relic Go agent
 func NewGORMApp(appName, connectionString string) *App {
 	// Wrap database conneciton with GORM
