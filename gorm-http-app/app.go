@@ -66,7 +66,7 @@ func okResponse(w http.ResponseWriter, txn *newrelic.Transaction, message string
 
 // API endpoing for the root of the application
 // Serves a static HTTP file
-func (app *App) Index(w http.ResponseWriter, r *http.Request) {
+func Index(w http.ResponseWriter, r *http.Request) {
 	txn := newrelic.FromContext(r.Context())
 	defer txn.StartSegment("Index").End()
 
@@ -203,7 +203,7 @@ func main() {
 	app := NewGORMApp(appName, "root@/product?charset=utf8mb4&parseTime=True&loc=Local")
 
 	// HTTP handlers
-	http.HandleFunc(newrelic.WrapHandleFunc(goAgent, "/", app.Index))
+	http.HandleFunc(newrelic.WrapHandleFunc(goAgent, "/", Index))
 	http.HandleFunc(newrelic.WrapHandleFunc(goAgent, "/add", app.Add))
 	http.HandleFunc(newrelic.WrapHandleFunc(goAgent, "/get", app.Get))
 
