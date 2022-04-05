@@ -16,4 +16,4 @@ To launch the application, run:
  go run main.go
  ```
 
- Once it is running, you can interract with the web UI at localhost:8000 in your browser. In the application's logs, it a line will be printed saying "Reporting to: ...." This is where you can access the data collected on your application by New Relic.
+ Once it is running, you can interract with the web UI at localhost:8000 in your browser. In the application's logs, a line will be printed saying "Reporting to: ...." This is where you can access the data collected on your application by New Relic.
