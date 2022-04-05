@@ -14,7 +14,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	// Import newrelic database driver as custom driver
 	// GORM will automatically use this driver as its mysql driver
@@ -27,8 +26,7 @@ import (
 )
 
 type App struct {
-	App *newrelic.Application
-	db  *gorm.DB
+	db *gorm.DB
 }
 
 type Product struct {
@@ -43,14 +41,15 @@ const (
 )
 
 // handler for formatting and sending bad request messages
-func errorResponse(w http.ResponseWriter, txn *newrelic.Transaction, errorNumber int, clientError, internalError error) {
-	// Observe Http response using new relic segment
-	defer txn.StartSegment("okResponse").End()
+func errorResponse(w http.ResponseWriter, txn *newrelic.Transaction, errorNumber int, clientError, internalError string) {
+	defer txn.StartSegment("errorResponse").End()
 
 	// log error locally
 	log.Println(internalError)
 
 	// send http error to client
+	// because our app sets the response number header to an error
+	// the Go agent will automatically detect it as an error
 	w.WriteHeader(errorNumber)
 	strError := strconv.Itoa(errorNumber)
 	response := fmt.Sprintf("%s - %s", strError, clientError)
@@ -59,44 +58,15 @@ func errorResponse(w http.ResponseWriter, txn *newrelic.Transaction, errorNumber
 
 // handler for formatting and sending ok request messages
 func okResponse(w http.ResponseWriter, txn *newrelic.Transaction, message string) {
-	// Observe Http response using new relic segment
 	defer txn.StartSegment("okResponse").End()
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(message))
 }
 
-func NewApp(appName, connectionString string) *App {
-	// Wrap database conneciton with GORM
-	gormdb, err := gorm.Open(mysql.New(mysql.Config{
-		DriverName: "nrmysql",
-		DSN:        connectionString,
-	}), &gorm.Config{})
-	if err != nil {
-		log.Fatal(err)
-	}
-	// Migrate the schema
-	gormdb.AutoMigrate(&Product{})
-	// initialize new relic go aganet app
-	app, err := newrelic.NewApplication(
-		newrelic.ConfigAppName(appName),
-		newrelic.ConfigFromEnvironment(),
-		newrelic.ConfigDistributedTracerEnabled(true),
-		newrelic.ConfigDebugLogger(os.Stdout),
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	app.WaitForConnection(5 * time.Second)
-
-	return &App{db: gormdb, App: app}
-}
-
 // API endpoing for the root of the application
 // Serves a static HTTP file
 func (app *App) Index(w http.ResponseWriter, r *http.Request) {
-	// Observe serving of Index using new relic segment
 	txn := newrelic.FromContext(r.Context())
 	defer txn.StartSegment("Index").End()
 
@@ -107,36 +77,16 @@ func (app *App) Index(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, p)
 }
 
-// a helper function to execute GET database transactions
-// gets the first Product that meets the provided condition
-func (app *App) getProduct(txn *newrelic.Transaction, condition, value string) (Product, error) {
-	// trace the createProduct function with a newRelic Segment
-	defer txn.StartSegment("getProduct").End()
-
-	// create a new relic context to pass to gorm to allow
-	// the go agent to observe the database transactions
-	ctx := newrelic.NewContext(context.Background(), txn)
-
-	var product Product
-	gormdb := app.db.WithContext(ctx)
-	err := gormdb.First(&product, condition, value).Error
-
-	return product, err
-}
-
 // API endpoint for the /get pattern
 // gets a single Product from the database by either Name or Code
 func (app *App) Get(w http.ResponseWriter, r *http.Request) {
-	// Observe serving of Index using new relic segment
 	txn := newrelic.FromContext(r.Context())
-	defer txn.StartSegment("Get").End()
 
 	// polulate r.Form
 	err := r.ParseForm()
 	if err != nil {
-		clientError := fmt.Errorf(BackendError)
-		internalError := fmt.Errorf("error parsing form during GET operation: %v", err)
-		errorResponse(w, txn, http.StatusInternalServerError, clientError, internalError)
+		internalError := fmt.Sprintf("error parsing form during GET operation: %v", err)
+		errorResponse(w, txn, http.StatusInternalServerError, BackendError, internalError)
 		return
 	}
 
@@ -146,58 +96,37 @@ func (app *App) Get(w http.ResponseWriter, r *http.Request) {
 
 	// lookup product based on arguments
 	var product Product
+	ctx := newrelic.NewContext(context.Background(), txn)
+	gormdb := app.db.WithContext(ctx)
 	if code != "" {
-		product, err = app.getProduct(txn, "code = ?", code)
+		err = gormdb.First(&product, "code = ?", code).Error
 	} else if name != "" {
-		product, err = app.getProduct(txn, "name = ?", name)
+		err = gormdb.First(&product, "name = ?", name).Error
 	} else {
-		msg := fmt.Errorf("bad request: either name or code must be provided for get")
+		msg := fmt.Sprintf("bad request: either name or code must be provided for get")
 		errorResponse(w, txn, http.StatusBadRequest, msg, msg)
 		return
 	}
 
 	if err != nil {
-		clientError := fmt.Errorf(BackendError)
-		internalError := fmt.Errorf("unable to GET product: %v", err)
-		errorResponse(w, txn, http.StatusInternalServerError, clientError, internalError)
+		internalError := fmt.Sprintf("unable to GET product: %v", err)
+		errorResponse(w, txn, http.StatusInternalServerError, BackendError, internalError)
 	} else {
 		response := fmt.Sprintf("%s,%s: $%s", product.Name, product.Code, strconv.Itoa(product.Price))
 		okResponse(w, txn, response)
 	}
 }
 
-// a helper function to execute the database create transaction
-func (app *App) createProduct(txn *newrelic.Transaction, code, name string, price int) error {
-	// trace the createProduct function with a newRelic Segment
-	defer txn.StartSegment("createProduct").End()
-
-	// create a new relic context to pass to gorm to allow
-	// the go agent to observe the database transactions
-	ctx := newrelic.NewContext(context.Background(), txn)
-
-	gormdb := app.db.WithContext(ctx)
-	err := gormdb.Create(&Product{
-		Code:  code,
-		Name:  name,
-		Price: price,
-	}).Error
-
-	return err
-}
-
 // API endpoint for the /add pattern
 // adds a single entry to the database
 func (app *App) Add(w http.ResponseWriter, r *http.Request) {
-	// Observe serving the Add handler using new relic segment
 	txn := newrelic.FromContext(r.Context())
-	defer txn.StartSegment("Get").End()
 
 	// Populate r.Form
 	err := r.ParseForm()
 	if err != nil {
-		clientError := fmt.Errorf(BackendError)
-		internalErr := fmt.Errorf("error parsing form when adding product: %v", err)
-		errorResponse(w, txn, http.StatusInternalServerError, clientError, internalErr)
+		internalErr := fmt.Sprintf("error parsing form when adding product: %v", err)
+		errorResponse(w, txn, http.StatusInternalServerError, BackendError, internalErr)
 		return
 	}
 
@@ -207,42 +136,76 @@ func (app *App) Add(w http.ResponseWriter, r *http.Request) {
 	price := r.Form.Get("price")
 
 	if code == "" || name == "" || price == "" {
-		clientError := fmt.Errorf("bad request: code, name, and price can not be empty")
+		clientError := fmt.Sprintf("bad request: code, name, and price can not be empty")
 		errorResponse(w, txn, http.StatusBadRequest, clientError, clientError)
 		return
 	}
 
 	intPrice, err := strconv.Atoi(price)
 	if err != nil {
-		clientError := fmt.Errorf(BackendError)
-		internalErr := fmt.Errorf("error converting %s to an integer: %v", price, err)
-		errorResponse(w, txn, http.StatusInternalServerError, clientError, internalErr)
+		internalErr := fmt.Sprintf("error converting %s to an integer: %v", price, err)
+		errorResponse(w, txn, http.StatusInternalServerError, BackendError, internalErr)
 	}
 
 	// add new product to the database
-	err = app.createProduct(txn, code, name, intPrice)
+	ctx := newrelic.NewContext(context.Background(), txn)
+	gormdb := app.db.WithContext(ctx)
+	err = gormdb.Create(&Product{
+		Code:  code,
+		Name:  name,
+		Price: intPrice,
+	}).Error
+
 	if err != nil {
-		clientError := fmt.Errorf(BackendError)
-		internalErr := fmt.Errorf("error creating product: %v", err)
-		errorResponse(w, txn, http.StatusInternalServerError, clientError, internalErr)
+		internalErr := fmt.Sprintf("error creating product: %v", err)
+		errorResponse(w, txn, http.StatusInternalServerError, BackendError, internalErr)
 	}
 
 	response := fmt.Sprintf("Added Product: {Code: %s, Name: %s, Price: %s}", code, name, price)
 	okResponse(w, txn, response)
 }
 
-// a helper function that wrapps the http.handleFunc in a newrelic wrapper
-func (app *App) Handle(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	http.HandleFunc(newrelic.WrapHandleFunc(app.App, pattern, handler))
+func (app *App) Remote(w http.ResponseWriter, r *http.Request) {
+
+}
+
+// NewApp initializes a an app object with a gorm db object and a New Relic Go agent
+func NewGORMApp(appName, connectionString string) *App {
+	// Wrap database conneciton with GORM
+	gormdb, err := gorm.Open(mysql.New(mysql.Config{
+		DriverName: "nrmysql",
+		DSN:        connectionString,
+	}), &gorm.Config{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Migrate the schema
+	gormdb.AutoMigrate(&Product{})
+
+	return &App{db: gormdb}
 }
 
 func main() {
-	app := NewApp("gorm-demo", "root@/product?charset=utf8mb4&parseTime=True&loc=Local")
+	appName := "gorm-web-app"
+
+	// initialize new relic go aganet app
+	goAgent, err := newrelic.NewApplication(
+		newrelic.ConfigAppName(appName),
+		newrelic.ConfigFromEnvironment(),
+		newrelic.ConfigDistributedTracerEnabled(true),
+		newrelic.ConfigDebugLogger(os.Stdout),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Initialize database connection
+	app := NewGORMApp(appName, "root@/product?charset=utf8mb4&parseTime=True&loc=Local")
 
 	// HTTP handlers
-	app.Handle("/", app.Index)
-	app.Handle("/add", app.Add)
-	app.Handle("/get", app.Get)
+	http.HandleFunc(newrelic.WrapHandleFunc(goAgent, "/", app.Index))
+	http.HandleFunc(newrelic.WrapHandleFunc(goAgent, "/add", app.Add))
+	http.HandleFunc(newrelic.WrapHandleFunc(goAgent, "/get", app.Get))
 
 	http.ListenAndServe(":8000", nil)
 }
