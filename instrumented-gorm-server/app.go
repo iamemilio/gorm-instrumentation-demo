@@ -1,8 +1,8 @@
 // Copyright 2020 New Relic Corporation. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// mysql database hosted in local container for this example
-// podman run --name mysql -p 3306:3306 -e MYSQL_ALLOW_EMPTY_PASSWORD=true -e MYSQL_DATABASE="product" mysql
+// postgress database hosted in local container for this example
+// podman run --name postgresql -e POSTGRES_USER=myusername -e POSTGRES_PASSWORD=mypassword -p 5432:5432 -d postgres
 
 package main
 
@@ -229,7 +229,6 @@ func newApp(appName, connectionString string) *App {
 }
 
 func main() {
-	// Running postgress server in podman: podman run --name postgresql -e POSTGRES_USER=myusername -e POSTGRES_PASSWORD=mypassword -p 5432:5432 -d postgres
 	app := newApp("gorm-demo", "host=localhost dbname=myusername port=5432 user=myusername password=mypassword")
 
 	// HTTP handlers
