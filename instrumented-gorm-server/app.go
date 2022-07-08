@@ -19,10 +19,10 @@ import (
 	// Import newrelic database driver as custom driver
 	// GORM will automatically use this driver as its mysql driver
 	// https://gorm.io/docs/connecting_to_the_database.html#Customize-Driver
-	_ "github.com/newrelic/go-agent/v3/integrations/nrmysql"
+	_ "github.com/newrelic/go-agent/v3/integrations/nrpgx"
 
 	"github.com/newrelic/go-agent/v3/newrelic"
-	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -66,40 +66,9 @@ func okResponse(w http.ResponseWriter, txn *newrelic.Transaction, message string
 	w.Write([]byte(message))
 }
 
-func NewApp(appName, connectionString string) *App {
-	// Wrap database conneciton with GORM
-	gormdb, err := gorm.Open(mysql.New(mysql.Config{
-		DriverName: "nrmysql",
-		DSN:        connectionString,
-	}), &gorm.Config{})
-	if err != nil {
-		log.Fatal(err)
-	}
-	// Migrate the schema
-	gormdb.AutoMigrate(&Product{})
-	// initialize new relic go aganet app
-	app, err := newrelic.NewApplication(
-		newrelic.ConfigAppName(appName),
-		newrelic.ConfigFromEnvironment(),
-		newrelic.ConfigDistributedTracerEnabled(true),
-		newrelic.ConfigDebugLogger(os.Stdout),
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	app.WaitForConnection(5 * time.Second)
-
-	return &App{db: gormdb, App: app}
-}
-
 // API endpoing for the root of the application
 // Serves a static HTTP file
 func (app *App) Index(w http.ResponseWriter, r *http.Request) {
-	// Observe serving of Index using new relic segment
-	txn := newrelic.FromContext(r.Context())
-	defer txn.StartSegment("Index").End()
-
 	p := "." + r.URL.Path
 	if p == "./" {
 		p = "./index.html"
@@ -127,10 +96,7 @@ func (app *App) getProduct(txn *newrelic.Transaction, condition, value string) (
 // API endpoint for the /get pattern
 // gets a single Product from the database by either Name or Code
 func (app *App) Get(w http.ResponseWriter, r *http.Request) {
-	// Observe serving of Index using new relic segment
 	txn := newrelic.FromContext(r.Context())
-	defer txn.StartSegment("Get").End()
-
 	// polulate r.Form
 	err := r.ParseForm()
 	if err != nil {
@@ -190,7 +156,6 @@ func (app *App) createProduct(txn *newrelic.Transaction, code, name string, pric
 func (app *App) Add(w http.ResponseWriter, r *http.Request) {
 	// Observe serving the Add handler using new relic segment
 	txn := newrelic.FromContext(r.Context())
-	defer txn.StartSegment("Get").End()
 
 	// Populate r.Form
 	err := r.ParseForm()
@@ -236,8 +201,36 @@ func (app *App) Handle(pattern string, handler func(http.ResponseWriter, *http.R
 	http.HandleFunc(newrelic.WrapHandleFunc(app.App, pattern, handler))
 }
 
+func newApp(appName, connectionString string) *App {
+	// Wrap database conneciton with GORM
+	gormdb, err := gorm.Open(postgres.New(postgres.Config{
+		DriverName: "nrpgx",
+		DSN:        connectionString,
+	}), &gorm.Config{})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Migrate the schema
+	gormdb.AutoMigrate(&Product{})
+	// initialize new relic go aganet app
+	app, err := newrelic.NewApplication(
+		newrelic.ConfigAppName(appName),
+		newrelic.ConfigFromEnvironment(),
+		newrelic.ConfigDebugLogger(os.Stdout),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	app.WaitForConnection(5 * time.Second)
+
+	return &App{db: gormdb, App: app}
+}
+
 func main() {
-	app := NewApp("gorm-demo", "root@/product?charset=utf8mb4&parseTime=True&loc=Local")
+	// Running postgress server in podman: podman run --name postgresql -e POSTGRES_USER=myusername -e POSTGRES_PASSWORD=mypassword -p 5432:5432 -d postgres
+	app := newApp("gorm-demo", "host=localhost dbname=myusername port=5432 user=myusername password=mypassword")
 
 	// HTTP handlers
 	app.Handle("/", app.Index)
